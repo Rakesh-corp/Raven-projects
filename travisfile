@@ -1,0 +1,39 @@
+language: rust
+cache: cargo
+sudo: required
+services:
+  - docker
+rust:
+  - 1.39.0
+git:
+  submodules: false
+
+install:
+  - cp .netrc ~/.netrc
+  - echo -e "machine github.com\n  login $GITHUB_ACCESS_TOKEN" > ~/.netrc
+  - cp ~/.netrc $TRAVIS_BUILD_DIR/.netrc
+  - git submodule update --init --recursive
+
+before_script:
+  - pip install --user pyyaml pytest git-python
+  - pip install --user awscli # install aws cli w/o sudo
+  - export PATH=$PATH:$HOME/.local/bin # put aws in the path
+  - eval $(aws ecr get-login --region us-east-2 --no-include-email) #needs AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY envvars
+  - docker run --rm --privileged 407636574581.dkr.ecr.us-east-2.amazonaws.com/multiarch/qemu-user-static:register --reset
+  - /bin/bash release_management.sh check_release_version gandalf 2 3 4 || travis_terminate 1
+  - python check_submodules.py || travis_terminate 1
+
+script:
+  - cd config/Global-Configs
+  - pytest ./tests/ -v -x || travis_terminate 1
+  - cd ../..
+  # Run the dockerfile.build again and push it to aws if anything changes
+  # build x86_64
+  - docker build -t 407636574581.dkr.ecr.us-east-2.amazonaws.com/gandalf:latest -f docker/Dockerfile.x86_64.release . || travis_terminate 1
+  # build arm32v7
+  - docker build -t 407636574581.dkr.ecr.us-east-2.amazonaws.com/arm32v7/gandalf:latest -f docker/Dockerfile.arm32v7.release . || travis_terminate 1
+  # if tests successfully pass, push the docker image
+  # create artifact for x86_64
+  - /bin/bash release_management.sh create_release_item gandalf docker 407636574581.dkr.ecr.us-east-2.amazonaws.com/gandalf true || travis_terminate 1
+  # create artifact for arm32v7
+  - /bin/bash release_management.sh create_release_item gandalf_arm32v7 docker 407636574581.dkr.ecr.us-east-2.amazonaws.com/arm32v7/gandalf false || travis_terminate 1
